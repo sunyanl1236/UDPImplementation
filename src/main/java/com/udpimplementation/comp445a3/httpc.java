@@ -1,13 +1,15 @@
 package com.udpimplementation.comp445a3;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.net.URL;
 
 import com.udpimplementation.comp445a3.CustomSocketClient.CurlImplement;
 import com.udpimplementation.comp445a3.CustomSocketClient.HttpRequestGenerator;
-import com.udpimplementation.comp445a3.CustomSocketClient.SocketClient;
 
 public class httpc {
-	public static void main(String[] args) {
+	public static void runHttpc(String[] args, SocketAddress routerAddr, InetSocketAddress serverAddr) {
 		// TODO Auto-generated method stub
 		//System.out.println(args);
 		CurlImplement curl = new CurlImplement(args);
@@ -40,7 +42,13 @@ public class httpc {
 		
 		//String req = reqGenerator.printReq();
 		
-		SocketClient.socketClientConnection(reqGenerator, curl.hasVerbose, host, url.toString(), curl.hasOutputFile, outFileName);
+//		SocketClient.socketClientConnection(reqGenerator, curl.hasVerbose, host, url.toString(), curl.hasOutputFile, outFileName);
+		try {
+			UDPClient.runClient(routerAddr, serverAddr, reqGenerator, curl.hasVerbose, url.toString(), curl.hasOutputFile, outFileName);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
 	}
 
 }

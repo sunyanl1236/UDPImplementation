@@ -7,6 +7,11 @@ import joptsimple.OptionSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.udpimplementation.comp445a3.CustomSocketClient.HttpRequestGenerator;
+
+import java.io.BufferedOutputStream;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -15,6 +20,7 @@ import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.charset.StandardCharsets;
+import java.util.Scanner;
 import java.util.Set;
 
 import static java.nio.channels.SelectionKey.OP_READ;
@@ -23,6 +29,8 @@ public class UDPClient {
 
     private static final Logger logger = LoggerFactory.getLogger(UDPClient.class);
     private static long seqNum = 0;
+    private static boolean doneHandshake = false;
+    private static FileWriter myWriter = null;
 
     /* perform TCP three-way handshaking
      * returns true if three-way handshaking successes, otherwise false
@@ -74,27 +82,29 @@ public class UDPClient {
     
     
     
-    private static void runClient(SocketAddress routerAddr, InetSocketAddress serverAddr) throws IOException {
+    public static void runClient(SocketAddress routerAddr, InetSocketAddress serverAddr, 
+    		HttpRequestGenerator reqGenerator, boolean isVerbose, String url, boolean hasOutCommand, String outFileName) throws IOException {
         try(DatagramChannel channel = DatagramChannel.open()){
         	logger.info("Start three-way handshaking process...");
         	//if three-way handshaking failed, keep initializing connection
-        	boolean doneHandshake = threeWayHandshake(channel, routerAddr, serverAddr);
+        	doneHandshake = threeWayHandshake(channel, routerAddr, serverAddr);
         	while(!doneHandshake) {
         		doneHandshake = threeWayHandshake(channel, routerAddr, serverAddr);
         	}
         	
-            String msg = "Hello World";
+        	//generate request
+            String request = reqGenerator.printReq();
             seqNum++;
             Packet p = new Packet.Builder()
                     .setType(Packet.DATA)
                     .setSequenceNumber(seqNum)
                     .setPortNumber(serverAddr.getPort())
                     .setPeerAddress(serverAddr.getAddress())
-                    .setPayload(msg.getBytes())
+                    .setPayload(request.getBytes())
                     .create();
             channel.send(p.toBuffer(), routerAddr);
 
-            logger.info("Sending \"{}\" to router at {}\n\n", msg, routerAddr);
+            logger.info("Sending request to router at {}\n\n", routerAddr);
 
             // Try to receive a packet within timeout.
             /* "Blocking" simply means a function will wait until a certain event happens.
@@ -113,20 +123,76 @@ public class UDPClient {
 //            }
             timeout(channel);
 
-            // We just want a single response.
+            //get response
+            String response = "";
             ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
             SocketAddress router = channel.receive(buf); //Receives a datagram via this channel.
-            buf.flip();
+            buf.flip(); //read mode
             Packet resp = Packet.fromBuffer(buf);
             logger.info("Received response from server.");
             logger.info("Packet: {}", resp);
             logger.info("Router: {}", router);
             String payload = new String(resp.getPayload(), StandardCharsets.UTF_8);
+            response = payload;
             logger.info("Payload: {}\n\n",  payload);
+            
+            //if the payload is http response, parse response body
+            if(response.contains("HTTP")) {
+            	String resBody = "";
+            	String[] strArr = response.split("\r\n\r\n",2);
+            	if(strArr != null) {
+            		resBody = strArr[1];
+            	}
+            	if(resBody.isEmpty()) {
+            		System.out.println("No response body.");
+            	} else {
+            		System.out.println("response body: " + resBody);
+            	}
+            }
 
-//            keys.clear();
-        }
-    }
+//          keys.clear();
+            
+            
+          //if contains "Content-Disposition", download the file
+//			if(response.toString().contains("Content-Disposition")) {
+//				String[] responseArr = response.toString().split("HTTP/1.0",2);
+//				response = new StringBuilder();
+//				response.append("HTTP/1.0").append(responseArr[1]);
+//				
+//				//get filename
+//				String[] contentDispositionArr = response.toString().split("filename = \"");
+//				int endIndex = contentDispositionArr[1].indexOf('"');
+//				String fileName = contentDispositionArr[1].substring(0, endIndex);
+//				System.out.println("Content-Disposition file name: " + fileName);
+//				
+//				//download the file
+//				FileOutputStream fos = new FileOutputStream(fileName);
+//			    BufferedOutputStream bos = new BufferedOutputStream(fos);
+//			    byte[] fileByte = responseArr[0].getBytes();
+//			    bos.write(fileByte, 0, fileByte.length);
+//			    bos.close();
+//			}
+			
+            if(isVerbose) {
+    			//print the details of response
+    			System.out.println("response:");
+    			System.out.println(response);
+    			
+    			//print the request
+    			System.out.println("\nrequest:");
+    			System.out.println(request);
+    		}
+            
+          //if has -o command, write the response to corresponding file name
+			if(hasOutCommand && !outFileName.isEmpty()) {
+				//File outFile = new File(outFileName);
+				myWriter = new FileWriter(outFileName);
+			    myWriter.write(response.toString());
+			}
+        }// end try
+    } //end method
+  
+    
     
     private static void timeout(DatagramChannel channel) throws IOException {
     	// Try to receive a packet within timeout.
@@ -179,7 +245,24 @@ public class UDPClient {
         SocketAddress routerAddress = new InetSocketAddress(routerHost, routerPort);
         InetSocketAddress serverAddress = new InetSocketAddress(serverHost, serverPort);
 
-        runClient(routerAddress, serverAddress);
+        Scanner sc = new Scanner(System.in);
+        logger.info("Please enter httpc command: ");
+        String keyIn = sc.nextLine();
+        String[] tempArgs = keyIn.split(" ");
+        
+        //test & drop the first "httpc"
+        System.out.println("check keyInArgs");
+        String[] keyInArgs = new String[tempArgs.length -1];
+        for(int i=1; i<tempArgs.length; i++){
+        	keyInArgs[i-1] = tempArgs[i];
+        	System.out.println(tempArgs[i]);
+        }
+        
+        httpc.runHttpc(keyInArgs, routerAddress, serverAddress);
+        
+//      runClient(routerAddress, serverAddress);
     }
+    
+    
 }
 

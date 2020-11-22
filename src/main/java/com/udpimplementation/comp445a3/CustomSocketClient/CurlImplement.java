@@ -27,7 +27,6 @@ public class CurlImplement {
 	private String argsOutFileName;
 	public boolean hasVerbose = false; //parse -v
 	public boolean hasHeaders = false;
-//	public boolean hasOverwrite = false; 
 	public boolean hasData = false;
 	public boolean hasFile = false;
 	public boolean hasOutputFile = false;
@@ -38,7 +37,6 @@ public class CurlImplement {
 	private final String DATA = "d";
 	private final String FILE = "f";
 	private final String OUT = "o";
-//	private final String OVERWRITE = "w"; //if allows write permission
 	private final String GET_OPTION = "get";
 	private final String POST_OPTION = "post";
 	private final String HELP = "help";
@@ -139,7 +137,13 @@ public class CurlImplement {
 		
 		//parse URL
 		try {
-			argUrl = new URL(args[args.length -1]);
+			//parse url string without quotes
+			String urlString = args[args.length -1];
+			if(urlString.charAt(0) == '\'') {
+				urlString = urlString.substring(1, urlString.length());
+			}
+			
+			argUrl = new URL(urlString);
 		}
 		catch(MalformedURLException e) {
 			System.out.println("Invalid URL, please try again.");

@@ -19,12 +19,13 @@ public class UDPServer {
 
     private static final Logger logger = LoggerFactory.getLogger(UDPServer.class);
     private static long seqNum = 0;
+    private static boolean doneHandshake = false;
 
     private void listenAndServe(int port) throws IOException {
 
         try (DatagramChannel channel = DatagramChannel.open()) {
             channel.bind(new InetSocketAddress(port));
-            logger.info("EchoServer is listening at {}", channel.getLocalAddress());
+            logger.info("EchoServer is listening at {}\n\n", channel.getLocalAddress());
             ByteBuffer buf = ByteBuffer
                     .allocate(Packet.MAX_LEN)
                     .order(ByteOrder.BIG_ENDIAN);
@@ -61,6 +62,7 @@ public class UDPServer {
                 //ack for building connection
                 else if(PktType == Packet.ACK && payload.equals("Success")) {
                 	logger.info("Build connection successfully!");
+                	doneHandshake = true;
                 	Packet resp = packet.toBuilder()
                 			.setPayload(payload.getBytes())
                 			.create();
