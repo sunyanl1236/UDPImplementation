@@ -18,6 +18,7 @@ import static java.util.Arrays.asList;
 public class UDPServer {
 
     private static final Logger logger = LoggerFactory.getLogger(UDPServer.class);
+    private static long seqNum = 0;
 
     private void listenAndServe(int port) throws IOException {
 
@@ -33,23 +34,51 @@ public class UDPServer {
                 SocketAddress router = channel.receive(buf);
 
                 // Parse a packet from the received raw data.
-                buf.flip();
+                buf.flip(); //read
                 Packet packet = Packet.fromBuffer(buf);
-                buf.flip();
-
+                int PktType = packet.getType();
+                
                 String payload = new String(packet.getPayload(), UTF_8);
                 logger.info("Packet: {}", packet);
+                logger.info("Packet type: {}", PktType);
                 logger.info("Payload: {}", payload);
                 logger.info("Router: {}", router);
+               
+                
+                buf.flip(); //write
+                
+                if(PktType == Packet.SYN) {
+                	//for acknowledging three-way handshake
+                	Packet synackPacket = packet.toBuilder()
+                            .setType(Packet.SYN_ACK)
+                            .setSequenceNumber(seqNum)
+                            .setPayload("".getBytes())
+                            .create();
+                	
+                	channel.send(synackPacket.toBuffer(), router);
+                	logger.info("Send SYN-ACK to client.\n\n");
+                }
+                //ack for building connection
+                else if(PktType == Packet.ACK && payload.equals("Success")) {
+                	logger.info("Build connection successfully!");
+                	Packet resp = packet.toBuilder()
+                			.setPayload(payload.getBytes())
+                			.create();
+                	channel.send(resp.toBuffer(), router);
+                	logger.info("Echo back the payload.\n\n");
+                }
+                else {
+                	// Send the response to the router not the client.
+                	// The peer address of the packet is the address of the client already.
+                	// We can use toBuilder to copy properties of the current packet.
+                	// This demonstrate how to create a new packet from an existing packet.
+                	Packet resp = packet.toBuilder()
+                			.setPayload(payload.getBytes())
+                			.create();
+                	channel.send(resp.toBuffer(), router);
+                	logger.info("Sent response to client.\n\n");
+                }
 
-                // Send the response to the router not the client.
-                // The peer address of the packet is the address of the client already.
-                // We can use toBuilder to copy properties of the current packet.
-                // This demonstrate how to create a new packet from an existing packet.
-                Packet resp = packet.toBuilder()
-                        .setPayload(payload.getBytes())
-                        .create();
-                channel.send(resp.toBuffer(), router);
 
             }
         }

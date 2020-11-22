@@ -14,6 +14,13 @@ public class Packet {
 
     public static final int MIN_LEN = 11;
     public static final int MAX_LEN = 1024;
+    
+    public static final int DATA = 0;
+    public static final int ACK = 1;
+    public static final int SYN = 2;
+    public static final int SYN_ACK = 3;
+    public static final int NAK = 4;
+    public static final int FIN = 5;
 
     private final int type;
     private final long sequenceNumber;
@@ -81,8 +88,8 @@ public class Packet {
      */
     public ByteBuffer toBuffer() {
         ByteBuffer buf = ByteBuffer.allocate(MAX_LEN).order(ByteOrder.BIG_ENDIAN);
-        write(buf);
-        buf.flip();
+        write(buf); //put pkt info into buf
+        buf.flip(); // flip the ByteBuffer from "reading from I/O" (putting) to "writing to I/O" (getting)
         return buf;
     }
 
@@ -91,8 +98,12 @@ public class Packet {
      */
     public byte[] toBytes() {
         ByteBuffer buf = toBuffer();
-        byte[] raw = new byte[buf.remaining()];
-        buf.get(raw);
+        /* limit:
+         * When filling the buffer, the limit is the same as the capacity. 
+         * When emptying the buffer, it is one past the last filled byte in the buffer.
+         * */
+        byte[] raw = new byte[buf.remaining()]; //return limit - position
+        buf.get(raw); //relative read whole data
         return raw;
     }
 
@@ -110,7 +121,7 @@ public class Packet {
         builder.setSequenceNumber(Integer.toUnsignedLong(buf.getInt()));
 
         byte[] host = new byte[]{buf.get(), buf.get(), buf.get(), buf.get()};
-        builder.setPeerAddress(Inet4Address.getByAddress(host));
+        builder.setPeerAddress(Inet4Address.getByAddress(host)); //Inet4Address represents an IPv4 address
         builder.setPortNumber(Short.toUnsignedInt(buf.getShort()));
 
         byte[] payload = new byte[buf.remaining()];
