@@ -140,7 +140,7 @@ public class CurlImplement {
 			//parse url string without quotes
 			String urlString = args[args.length -1];
 			if(urlString.charAt(0) == '\'') {
-				urlString = urlString.substring(1, urlString.length());
+				urlString = urlString.substring(1, urlString.length()-1);
 			}
 			
 			argUrl = new URL(urlString);

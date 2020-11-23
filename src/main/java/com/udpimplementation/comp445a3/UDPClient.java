@@ -31,20 +31,22 @@ public class UDPClient {
     private static long seqNum = 0;
     private static boolean doneHandshake = false;
     private static FileWriter myWriter = null;
+    private static SocketAddress routerAddress = null;
+    private static InetSocketAddress serverAddress = null;
 
     /* perform TCP three-way handshaking
      * returns true if three-way handshaking successes, otherwise false
      * */
-    private static boolean threeWayHandshake(DatagramChannel channel, SocketAddress routerAddr, InetSocketAddress serverAddr) throws IOException {
+    private static boolean threeWayHandshake(DatagramChannel channel) throws IOException {
     	//send SYN to initialize the connection	
     	Packet synPacket = new Packet.Builder()
                 .setType(Packet.SYN)
                 .setSequenceNumber(seqNum)
-                .setPortNumber(serverAddr.getPort())
-                .setPeerAddress(serverAddr.getAddress())
+                .setPortNumber(serverAddress.getPort())
+                .setPeerAddress(serverAddress.getAddress())
                 .setPayload("".getBytes())
                 .create();
-        channel.send(synPacket.toBuffer(), routerAddr);
+        channel.send(synPacket.toBuffer(), routerAddress);
         
         logger.info("Sending SYN to initialize connection.\n\n");
         
@@ -55,6 +57,11 @@ public class UDPClient {
         channel.receive(buf); //Receives a datagram via this channel,source address is returned.
         buf.flip(); //change mode to reading
         Packet resp = Packet.fromBuffer(buf);
+        
+        //update server address
+        serverAddress = new InetSocketAddress(resp.getPeerAddress(), resp.getPeerPort());
+        //test
+        System.out.println("new server port is: "+ resp.getPeerPort());
         
         if(resp.getType() == Packet.SYN_ACK) {
         	logger.info("Received SYN-ACK from the server.");
@@ -67,11 +74,11 @@ public class UDPClient {
         	Packet ackConnectionPacket = new Packet.Builder()
                     .setType(Packet.ACK)
                     .setSequenceNumber(seqNum)
-                    .setPortNumber(serverAddr.getPort())
-                    .setPeerAddress(serverAddr.getAddress())
+                    .setPortNumber(serverAddress.getPort())
+                    .setPeerAddress(serverAddress.getAddress())
                     .setPayload(msg.getBytes())
                     .create();
-            channel.send(ackConnectionPacket.toBuffer(), routerAddr);
+            channel.send(ackConnectionPacket.toBuffer(), routerAddress);
             
             logger.info("Sending ACK and first payload to confirm connection.\n\n");
             
@@ -82,14 +89,13 @@ public class UDPClient {
     
     
     
-    public static void runClient(SocketAddress routerAddr, InetSocketAddress serverAddr, 
-    		HttpRequestGenerator reqGenerator, boolean isVerbose, String url, boolean hasOutCommand, String outFileName) throws IOException {
+    public static void runClient(HttpRequestGenerator reqGenerator, boolean isVerbose, String url, boolean hasOutCommand, String outFileName) throws IOException {
         try(DatagramChannel channel = DatagramChannel.open()){
         	logger.info("Start three-way handshaking process...");
         	//if three-way handshaking failed, keep initializing connection
-        	doneHandshake = threeWayHandshake(channel, routerAddr, serverAddr);
+        	doneHandshake = threeWayHandshake(channel);
         	while(!doneHandshake) {
-        		doneHandshake = threeWayHandshake(channel, routerAddr, serverAddr);
+        		doneHandshake = threeWayHandshake(channel);
         	}
         	
         	//generate request
@@ -98,13 +104,13 @@ public class UDPClient {
             Packet p = new Packet.Builder()
                     .setType(Packet.DATA)
                     .setSequenceNumber(seqNum)
-                    .setPortNumber(serverAddr.getPort())
-                    .setPeerAddress(serverAddr.getAddress())
+                    .setPortNumber(serverAddress.getPort())
+                    .setPeerAddress(serverAddress.getAddress())
                     .setPayload(request.getBytes())
                     .create();
-            channel.send(p.toBuffer(), routerAddr);
+            channel.send(p.toBuffer(), routerAddress);
 
-            logger.info("Sending request to router at {}\n\n", routerAddr);
+            logger.info("Sending request to router at {}\n\n", routerAddress);
 
             // Try to receive a packet within timeout.
             /* "Blocking" simply means a function will wait until a certain event happens.
@@ -242,8 +248,8 @@ public class UDPClient {
         String serverHost = (String) opts.valueOf("server-host");
         int serverPort = Integer.parseInt((String) opts.valueOf("server-port"));
 
-        SocketAddress routerAddress = new InetSocketAddress(routerHost, routerPort);
-        InetSocketAddress serverAddress = new InetSocketAddress(serverHost, serverPort);
+        routerAddress = new InetSocketAddress(routerHost, routerPort);
+        serverAddress = new InetSocketAddress(serverHost, serverPort);
 
         Scanner sc = new Scanner(System.in);
         logger.info("Please enter httpc command: ");
@@ -251,11 +257,9 @@ public class UDPClient {
         String[] tempArgs = keyIn.split(" ");
         
         //test & drop the first "httpc"
-        System.out.println("check keyInArgs");
         String[] keyInArgs = new String[tempArgs.length -1];
         for(int i=1; i<tempArgs.length; i++){
         	keyInArgs[i-1] = tempArgs[i];
-        	System.out.println(tempArgs[i]);
         }
         
         httpc.runHttpc(keyInArgs, routerAddress, serverAddress);
