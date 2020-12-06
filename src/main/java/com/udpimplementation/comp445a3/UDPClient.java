@@ -16,6 +16,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
@@ -182,6 +183,25 @@ public class UDPClient {
     	    			logger.info("Close connection on the client side.");
     	    			channel.close();
     	    		}
+    			}else {
+    				isConnectionClosed = true;
+    				logger.info("Client side goes into FIN_WAIT.");
+    				Timer wait_timer = new Timer();
+    				wait_timer.schedule(new TimerTask() {
+    					  @Override
+    					  public void run() {
+		    	    			logger.info("Close connection on the client side.");
+		    	    			try {
+									channel.close();
+								} 
+		    	    			catch (ClosedChannelException e) {
+									System.exit(0);
+								}
+		    	    			catch (IOException e) {
+									System.exit(0);
+								}
+    					  }
+    					}, 10000);
     			}
     		}
     	}
