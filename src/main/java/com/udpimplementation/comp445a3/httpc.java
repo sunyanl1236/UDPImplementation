@@ -41,14 +41,7 @@ public class httpc {
 		reqGenerator.setQueryParam(queryParam);
 		
 		//String req = reqGenerator.printReq();
-		
-//		SocketClient.socketClientConnection(reqGenerator, curl.hasVerbose, host, url.toString(), curl.hasOutputFile, outFileName);
-		try {
-			UDPClient.runClient(reqGenerator, curl.hasVerbose, url.toString(), curl.hasOutputFile, outFileName);
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
+		UDPClient.generatePackets(reqGenerator, curl.hasVerbose, url.toString(), curl.hasOutputFile, outFileName);
 	}
 
 }

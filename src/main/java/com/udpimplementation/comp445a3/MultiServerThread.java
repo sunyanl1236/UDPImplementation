@@ -1,4 +1,4 @@
-package com.udpimplementation.comp445a3.CustomSocketServer;
+package com.udpimplementation.comp445a3;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -8,11 +8,13 @@ import java.io.PrintWriter;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.DatagramChannel;
+import java.nio.channels.Selector;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -21,38 +23,49 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.slf4j.Logger;
 
 import com.udpimplementation.comp445a3.Packet;
+import com.udpimplementation.comp445a3.CustomSocketServer.HttpResponseGenerator;
 
 public class MultiServerThread extends Thread{
-	private Packet packet = null;
-	private DatagramSocket socket = null;
+	public DatagramChannel channel = null;
+	private SocketAddress clientAddress = null; //client address
+	private SocketAddress routerAddress = null; //router address
 	private BufferedReader in = null;
 	private HttpResponseGenerator resGenetator = null;
-	
+	private ByteBuffer readBuf = ByteBuffer.allocate(Packet.MAX_LEN).order(ByteOrder.BIG_ENDIAN);
+
 	final static ReadWriteLock rwlock = new ReentrantReadWriteLock();
 	final static Lock rlock = rwlock.readLock();
 	final static Lock wlock = rwlock.writeLock();
 	private static Logger logger = null;
 	private static long seqNum = 0;
-	private static boolean doneHandshake = false;
-	private static boolean listening = true;
-	private static DatagramChannel channel = null;
-	
+	private static Selector selector = null;
+
+	private boolean doneHandshake = false;
 	private String requestMethod;
 	private String queryDir;
 	private String rootDir;
 	private String reqBody = "";
 	private String response;
+	private String msgRead = "";
 	private boolean hasOverwrite = false;
 	private boolean hasContentLength = false;
 	private boolean hasDebugMsg;
 	private int contentLen = 0;
 	private boolean needDownload = false;
-	private int portNum;
-	
-	
-	public MultiServerThread(DatagramChannel chn, Packet initialPkt, int serverPort, Logger l, String rootDir, boolean hasDebugMsg) {
-		channel = chn;
-		this.packet = initialPkt;
+	public int portNum;
+//	private int count; //thread number
+	private int countRun=0; //count the running times
+	private Packet packet = null;
+
+
+	public MultiServerThread(DatagramChannel chn, Selector s, SocketAddress clientAddress, SocketAddress routerAddress, 
+			ByteBuffer readBuf, int serverPort, Logger l, String rootDir, boolean hasDebugMsg) {
+		this.channel = chn;
+		this.clientAddress = clientAddress;
+		this.routerAddress = routerAddress;
+//		this.packet = packet;
+		this.readBuf= readBuf; //initialize readBuf
+		selector = s;
 		this.portNum = serverPort;
 		this.resGenetator = HttpResponseGenerator.getResponseObj();
 		this.resGenetator.setDebugMsg(hasDebugMsg);
@@ -60,21 +73,48 @@ public class MultiServerThread extends Thread{
 		this.hasDebugMsg = hasDebugMsg;
 		logger = l;
 	}
-	
-	/*********seems not receiving second packet ***************/
+
+
 	public void run() {
 		try {
-			socket = new DatagramSocket(portNum);
-			
-			while(listening) {
+			ByteBuffer writeBuf = ByteBuffer
+					.allocate(Packet.MAX_LEN)
+					.order(ByteOrder.BIG_ENDIAN);
 
-				//get info from packet received
+			while(true) {
+				if(countRun!=0) {
+            		//check if receive from the same client 
+					readBuf.rewind(); //reset position to 0
+            		SocketAddress routerAddr = channel.receive(readBuf);
+//            		readBuf.flip(); //read
+					System.out.println("&&&&&&&&&&&&&&&&&&& Test &&&&&&&&&&&&&&&"+" readBuf limit: "+ readBuf.limit());
+					packet = Packet.fromBuffer(readBuf);
+					
+					//read client info
+		            InetSocketAddress receivedClientAddr = new InetSocketAddress(packet.getPeerAddress(), packet.getPeerPort());
+		            String receivedClientAddrStr = receivedClientAddr.toString();
+					
+            		if ( receivedClientAddrStr.equals(this.clientAddress.toString())) {
+            			System.out.println("*************received client Address: "+ receivedClientAddrStr);
+            		}
+            		else {
+            			continue;
+            		}
+            	}
+				
+				packet = Packet.fromBuffer(readBuf);
 				String payload = new String(packet.getPayload(), StandardCharsets.UTF_8);
 				int PktType = packet.getType();
-				InetAddress clientAddr = packet.getPeerAddress();
-				int clientPort = packet.getPeerPort();
-				byte[] packetByteArr = null;
-				
+//	            InetSocketAddress receivedClientAddr = new InetSocketAddress(packet.getPeerAddress(), packet.getPeerPort());
+//	            String receivedClientAddrStr = receivedClientAddr.toString();
+	            byte[] packetByteArr = null;
+	        	
+				logger.info("Packet: {}", packet);
+				logger.info("Packet type: {}", PktType);
+				logger.info("Payload: {}", payload);
+//				logger.info("Router: {}", router);
+				readBuf.clear(); 
+	
 				if(PktType == Packet.SYN) {
 					//for acknowledging three-way handshake
 					Packet synackPacket = packet.toBuilder()
@@ -82,10 +122,11 @@ public class MultiServerThread extends Thread{
 							.setSequenceNumber(seqNum)
 							.setPayload("".getBytes())
 							.create();
-					
+	
 					//convert Packet to byte array
 					packetByteArr = synackPacket.toBytes();
-					
+					System.out.println("Peer address in generated packet " + synackPacket.getPeerAddress().toString()+": "+synackPacket.getPeerPort());
+	
 					logger.info("Send SYN-ACK to client.\n\n");
 				}
 				//receive ack for building connection
@@ -95,10 +136,10 @@ public class MultiServerThread extends Thread{
 					Packet resp = packet.toBuilder()
 							.setPayload(payload.getBytes())
 							.create();
-					
+	
 					//convert Packet to byte array
 					packetByteArr = resp.toBytes();
-					
+	
 					logger.info("Echo back the payload.\n\n");
 				}
 				else if(payload.contains("HTTP")){ //if payload contains an HTTP request
@@ -106,26 +147,26 @@ public class MultiServerThread extends Thread{
 						System.out.println("\n\nPrint the request:");
 						String request = parseRequest(payload);
 						System.out.println(request);
-						
+	
 						//get response
 						byte[] result = this.resGenetator.processRequest(this.requestMethod, this.queryDir, this.rootDir, this.hasOverwrite, this.reqBody, rlock, wlock, this.needDownload);
 						this.response = this.resGenetator.printResponse();
-						
+	
 						System.out.println("\n\nPrint the response:");
 						System.out.println(this.response);
-						
+	
 						String newPayload = this.response;
 						if(result != null) {
 							newPayload += new String(result, StandardCharsets.UTF_8);
 						}
-						
+	
 						Packet resp = packet.toBuilder()
 								.setPayload(newPayload.getBytes())
 								.create();
-						
+	
 						//convert Packet to byte array
 						packetByteArr = resp.toBytes();
-						
+	
 						logger.info("Sent response to client.\n\n");
 					}
 					else {
@@ -141,10 +182,10 @@ public class MultiServerThread extends Thread{
 						Packet resp = packet.toBuilder()
 								.setPayload(payload.getBytes())
 								.create();
-						
+	
 						//convert Packet to byte array
 						packetByteArr = resp.toBytes();
-						
+	
 						logger.info("Sent echo response to client.\n\n");
 					}
 					else {
@@ -152,34 +193,24 @@ public class MultiServerThread extends Thread{
 					}
 				}
 				
-				
-				//send the response to client
-				DatagramPacket resPacket = new DatagramPacket(packetByteArr, packetByteArr.length, clientAddr, clientPort);
-				socket.send(resPacket);
-				
-				//receive pkt from the same client again
-				byte[] data = new byte[1024];
-				DatagramPacket datagramPacket = new DatagramPacket(data, data.length);
-				socket.receive(datagramPacket);
-				data = datagramPacket.getData();
-				System.out.println("print the datagram received: ");
-				String dataStr = new String(data, StandardCharsets.UTF_8);
-				System.out.println(dataStr);
-			} //end while
-			
-			//close udp socket
-			if(socket != null) {
-				socket.close();
+				if(packetByteArr !=null) {
+					writeBuf.put(packetByteArr);
+					writeBuf.flip();
+					channel.send(writeBuf, routerAddress);
+					writeBuf.clear();
+					countRun++;
+				}
+	
 			}
 		}
 		catch(IOException e) {
 			e.printStackTrace();
 		}
 	} //end method
-	
+
 	private String parseRequest(String rawReq) throws IOException {
 		String[] reqArr = rawReq.split("\\r\\n");
-		
+
 		//test
 		System.out.println("print reqArr\n");
 		for(String ss : reqArr) {
@@ -190,33 +221,33 @@ public class MultiServerThread extends Thread{
 		if(reqLine.contains("GET") || reqLine.contains("POST")) {
 			//split the request line by " "
 			String[] reqLineArr = reqLine.split(" ");
-			
+
 			//test
 			System.out.println("print reqLineArr\n");
 			for(String ss : reqLineArr) {
 				System.out.println(ss);
 			}
-			
+
 			this.requestMethod = reqLineArr[0];
 			this.queryDir = reqLineArr[1];
-			
+
 			//check if the file need to be download
 			if(this.queryDir.equals("/dir1/dir11/download.txt") || this.queryDir.equals("/dir2/downloadpage.html")) {
 				this.needDownload = true;
 			}
-			
+
 			//test
 			System.out.println("requestMethod: "+this.requestMethod);
 			System.out.println("queryDir: "+this.queryDir);
 		}
-		
+
 		if(rawReq.contains("Content-Length")) {
 			this.hasContentLength = true;
 			String contentLenStr1 = rawReq.split("Content-Length: ")[1];
 			String contentLenStr2 = contentLenStr1.split("\\r\\n")[0];
 			this.contentLen = Integer.parseInt(contentLenStr2);
 			System.out.println("hasContentLength: "+ this.hasContentLength + "contentLen" + this.contentLen);
-			
+
 			//if has content length, read request body
 			System.out.println("Has request body.");
 			char c;
@@ -228,15 +259,15 @@ public class MultiServerThread extends Thread{
 		if(rawReq.contains("Has-Overwrite")) {
 			String hasOverwriterStr1 = rawReq.split("Has-Overwrite: ")[1];
 			String hasOverwriterStr2 = hasOverwriterStr1.split("\\r\\n")[0];
-			
+
 			this.hasOverwrite = Boolean.parseBoolean(hasOverwriterStr2);
 			System.out.println("hasOverwrite: "+ this.hasOverwrite);
 		}
-		
+
 		//generate whole request
 		String reqLineStr = rawReq.split("\\r\\n\\r\\n")[0];
 		String wholeReq = reqLineStr + "\\r\\n\\r\\n" + this.reqBody;
 		return wholeReq;
 	}//end method
-	
+
 } //end class

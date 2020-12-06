@@ -21,6 +21,7 @@ public class Packet {
     public static final int SYN_ACK = 3;
     public static final int NAK = 4;
     public static final int FIN = 5;
+    public static final int FIN_ACK = 6;
 
     private final int type;
     private final long sequenceNumber;
