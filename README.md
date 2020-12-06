@@ -4,9 +4,8 @@ Implemented the HTTP client and the HTTP remote file manager using UDP protocol.
 
 # Technologies
 
-Maven
-Java
-IDE: Eclipse
+* Maven
+* Java (IDE: Eclipse)
 
 # Examples of use
 1. Run router.go and set drop rate and max delay time
