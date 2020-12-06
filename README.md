@@ -2,7 +2,7 @@
 
 Implemented the HTTP client and the HTTP remote file manager using UDP protocol. Because UDP protocol does not guarantee the transfer, to ensure reliability, the Automatic-Repeat-Request (ARQ) protocol, three-way handshaking (SYN, SYN-ACK, ACK), and closing a connection (FIN, FIN-ACK, ACK) are implemented.
 
-Please refer to Detail.pdf
+Please refer to [Detail.pdf](https://github.com/sunyanl1236/UDPImplementation/blob/main/Detail.pdf)
 
 # Technologies
 
