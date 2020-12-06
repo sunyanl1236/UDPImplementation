@@ -50,6 +50,7 @@ public class UDPClient {
     private static boolean hasOutCommand;
     private static String outFileName;
     private static String request;
+    public static boolean isServerRcvAllPkt = false; //server recerved "done" and send response
     
     private static HashMap<Long, PacketInformation> packetsInfo = new HashMap<>(); 
     private static Queue<Packet> generatedPackets = new LinkedList<Packet>(); // generated packets inside client
@@ -73,7 +74,7 @@ public class UDPClient {
 
 		channel.send(synPacket.toBuffer(), routerAddress);
 		//start timer
-		timer.schedule(new PacketTimer(synPacket), 10000);
+//		timer.schedule(new PacketTimer(synPacket), 10000);
 		
 		logger.info("Sending SYN to initialize connection.\n\n");
     	
@@ -109,51 +110,81 @@ public class UDPClient {
         		
         		channel.send(ackConnectionPacket.toBuffer(), routerAddress);
         		logger.info("Sending ACK and first payload to confirm connection.\n\n");
-        		return true;
+        		
+        		if(timeout(channel)) {
+        			buf.clear();
+        			channel.receive(buf); //Receives a datagram via this channel,source address is returned.
+                	buf.flip(); //change mode to reading
+                	Packet ackedp = Packet.fromBuffer(buf);
+                	String payload = new String(ackedp.getPayload(), StandardCharsets.UTF_8);
+        			if(ackedp.getType() == Packet.ACK && payload.contains("Succeed Connection")) {
+        				//handshake successfully in the server side, do nothing
+        				logger.info("Build connection successfully!\n\n");
+        				return true;
+        			}
+        		}
         	}
         }
-        
         return false;
     }
     
     private static void closeConnection() throws IOException {
-    	Packet FINpkt = new Packet.Builder()
-				.setType(Packet.FIN)
-				.setSequenceNumber(++seqNum)
-				.setPortNumber(serverAddress.getPort())
-				.setPeerAddress(serverAddress.getAddress())
-				.setPayload("".getBytes())
-				.create();
+    	boolean isConnectionClosed = false;
     	
-    	do {
-    		channel.send(FINpkt.toBuffer(), routerAddress);
-        	logger.info("Client sent FIN to close connection.");
+    	while(!isConnectionClosed) {
+    		Packet FINpkt = new Packet.Builder()
+    				.setType(Packet.FIN)
+    				.setSequenceNumber(++seqNum)
+    				.setPortNumber(serverAddress.getPort())
+    				.setPeerAddress(serverAddress.getAddress())
+    				.setPayload("".getBytes())
+    				.create();
+    		
+    		do {
+    			channel.send(FINpkt.toBuffer(), routerAddress);
+    			logger.info("Client sent FIN to close connection.");
+    		}
+    		while(!timeout(channel)); //wait for FIN response
+    		
+    		ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
+    		
+    		channel.receive(buf); //Receives a datagram via this channel,source address is returned.
+    		buf.flip(); //change mode to reading
+    		Packet resp = Packet.fromBuffer(buf);
+    		int resType = resp.getType();
+    		String payload = new String(resp.getPayload(), StandardCharsets.UTF_8);
+    		
+    		if(resType == Packet.FIN_ACK && payload.equals("Finish")) {
+    			logger.info("Received FIN_ACK from server.");
+    			
+    			Packet ACKpkt = new Packet.Builder()
+    					.setType(Packet.ACK)
+    					.setSequenceNumber(packetsNum+2)
+    					.setPortNumber(serverAddress.getPort())
+    					.setPeerAddress(serverAddress.getAddress())
+    					.setPayload("Finish connection".getBytes())
+    					.create();
+    			
+    			
+    			channel.send(ACKpkt.toBuffer(), routerAddress);
+    			timer.schedule(new PacketTimer(ACKpkt), 10000);
+    			
+    			if(timeout(channel)) {
+    				buf.clear();
+    				channel.receive(buf); //Receives a datagram via this channel,source address is returned.
+    	    		buf.flip(); //change mode to reading
+    	    		resp = Packet.fromBuffer(buf);
+    	    		resType = resp.getType();
+    	    		payload = new String(resp.getPayload(), StandardCharsets.UTF_8);
+    	    		
+    	    		if(resType == Packet.DONE && payload.contains("Closed")) {
+    	    			isConnectionClosed = true;
+    	    			logger.info("Close connection on the client side.");
+    	    			channel.close();
+    	    		}
+    			}
+    		}
     	}
-        while(!timeout(channel)); //wait for FIN response
-    	
-    	ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
-    	
-        channel.receive(buf); //Receives a datagram via this channel,source address is returned.
-        buf.flip(); //change mode to reading
-        Packet resp = Packet.fromBuffer(buf);
-        int resType = resp.getType();
-        String payload = new String(resp.getPayload(), StandardCharsets.UTF_8);
-        
-        if(resType == Packet.FIN_ACK && payload.equals("Finish")) {
-        	logger.info("Received FIN_ACK from server to acknowledge client's FIN.");
-        	
-        	Packet ACKpkt = new Packet.Builder()
-        			.setType(Packet.ACK)
-        			.setSequenceNumber(++seqNum)
-        			.setPortNumber(serverAddress.getPort())
-        			.setPeerAddress(serverAddress.getAddress())
-        			.setPayload("Finish connection".getBytes())
-        			.create();
-        	channel.send(ACKpkt.toBuffer(), routerAddress);
-        	timer.schedule(new PacketTimer(ACKpkt), 10000);
-        	logger.info("Close connection on the client side.");
-        	channel.close();
-        }
     }
     
     public static void runClient() throws IOException {
@@ -250,18 +281,22 @@ public class UDPClient {
         					info.setStatus("ACKED");
     					}
     				}
-    				else { //payload is response
+    				else if(payload.contains("SYN-ACK")) {
+    					//useless ACK response from server side, do nothing
+    				}
+    				else if(receivedAllAck()){ //payload is response
+    					isServerRcvAllPkt = true;
     					String response = payload;
 //    					System.out.println("payload is response: "+ response); //test
     					String resBody = "";
-						String[] strArr = payload.split("\\r\\n\\r\\n",2);
+						String[] strArr = payload.split("\\R",2);
 						
 						//test strArr
-//						System.out.println("********split response payload: ");
-//						for(String s: strArr) {
-//							System.out.println(s);
-//						}
-//						System.out.println("*************");
+						System.out.println("********split response payload: ");
+						for(String s: strArr) {
+							System.out.println(s);
+						}
+						System.out.println("*************");
 						
 						if(strArr != null) {
 							resBody = strArr[1];
@@ -336,9 +371,24 @@ public class UDPClient {
             logger.info("Packet generated: {} payload: {}", p, requestChunk[i]);
     		logger.info("Put packet {} into HashMap.\n\n", seqNum);
     	}
+    	
+    	
     }
     
     public static void adjustWindowSeq() throws IOException {
+    	if(windowSeq.isEmpty() && receivedAllAck()) {
+    		Packet endPkt = new Packet.Builder()
+    				.setType(Packet.DONE)
+    				.setSequenceNumber(packetsNum+1)
+    				.setPortNumber(serverAddress.getPort())
+    				.setPeerAddress(serverAddress.getAddress())
+    				.setPayload("Done".getBytes())
+    				.create();
+    		
+    		channel.send(endPkt.toBuffer(), routerAddress);
+    		timer.schedule(new PacketTimer(endPkt), 10000); //restart timer
+    	}
+    	
     	while(!windowSeq.isEmpty()) {
 	    	Long seq = windowSeq.getFirst(); //dequeue one seq#
 	    	PacketInformation info = packetsInfo.get(seq);
@@ -373,6 +423,9 @@ public class UDPClient {
     	
     }
     
+    private static boolean receivedAllAck() {
+    	return generatedPackets.isEmpty() && windowSeq.isEmpty();
+    }
     
     private static boolean timeout(DatagramChannel channel) throws IOException {
     	// Try to receive a packet within timeout.
@@ -487,17 +540,28 @@ public class UDPClient {
     		//check if the packet is not acked
     		try {
     			Long pSeq = p.getSequenceNumber();
-    			System.out.println("pSeq: "+pSeq.longValue());
-    			if(pSeq != 0) {
+//    			System.out.println("pSeq: "+pSeq.longValue());
+    			if(pSeq > 0 && pSeq<=packetsNum) {
     				PacketInformation info = packetsInfo.get(pSeq);
-    				System.out.println("info is null? " + (info == null));
+//    				System.out.println("info is null? " + (info == null));
     				
     				if(!info.getStatus().equals("ACKED")) {
     					info.setStatus("RESENT");
     					channel.send(p.toBuffer(), routerAddress);
+    					timer.schedule(new PacketTimer(p), 10000); //restart timer
+    					logger.info("Resend packet seq# {}.", pSeq);
     				}
-    			}else {
+    			}
+    			else if(pSeq == (packetsNum+1) && !isServerRcvAllPkt) {
     				channel.send(p.toBuffer(), routerAddress);
+					timer.schedule(new PacketTimer(p), 10000); //restart timer
+    			}
+    			else if(pSeq == (packetsNum+2)) {
+    				
+    			}
+    			else {
+    				channel.send(p.toBuffer(), routerAddress);
+    				timer.schedule(new PacketTimer(p), 10000); //restart timer
     			}
     		} 
     		catch (IOException e) {

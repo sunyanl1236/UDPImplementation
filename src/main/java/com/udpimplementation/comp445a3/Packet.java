@@ -19,7 +19,7 @@ public class Packet {
     public static final int ACK = 1;
     public static final int SYN = 2;
     public static final int SYN_ACK = 3;
-    public static final int NAK = 4;
+    public static final int DONE = 4;
     public static final int FIN = 5;
     public static final int FIN_ACK = 6;
 

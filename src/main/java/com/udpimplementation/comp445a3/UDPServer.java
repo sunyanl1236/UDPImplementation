@@ -59,6 +59,7 @@ public class UDPServer {
 	private boolean hasContentLength = false;
 	private int contentLen = 0;
 	private boolean needDownload = false;
+//	private boolean clientSideDone = false; //check if client side done transfer
 	public int portNum;
 	private static HttpResponseGenerator resGenetator = HttpResponseGenerator.getResponseObj();
 	private static LinkedList<Long> windowSeq = new LinkedList<Long>(); //packets seq# inside a single window size
@@ -101,7 +102,6 @@ public class UDPServer {
                 logger.info("Router: {}", router);
                 
                 readBuf.flip(); //write
-                byte[] packetByteArr = null;
                 
                 if(PktType == Packet.SYN) {
 					//for acknowledging three-way handshake
@@ -122,7 +122,14 @@ public class UDPServer {
 				else if(PktType == Packet.ACK && payload.contains("Success")) {
 					logger.info("Build connection successfully!");
 					doneHandshake = true;
+					
+					Packet respACK = packet.toBuilder()
+							.setType(Packet.ACK)
+							.setPayload("Succeed Connection".getBytes())
+							.create();
 
+					channel.send(respACK.toBuffer(), router);
+					
 					//initialize packetsNum, windowSize
 					String[] tempArr = payload.split("\n");
 					packetsNum = Integer.parseInt(tempArr[1].substring(tempArr[1].indexOf(':')+2));
@@ -138,7 +145,7 @@ public class UDPServer {
 						Long seqN = toBeAckedPackets.remove();
 						windowSeq.addLast(seqN);
 					}
-					System.out.println("*************packetsNum: "+packetsNum+" windowSize: "+windowSize);
+					logger.info("Supposed to get {} packets from client, and window size is {}.", packetsNum, windowSize);
 				}
 				else if(PktType == Packet.FIN && doneHandshake) {
 					logger.info("Received FIN from client.");
@@ -148,9 +155,15 @@ public class UDPServer {
 							.create();
 
 					channel.send(respACK.toBuffer(), router);
-					logger.info("Sent FIN_ACK to acknowledge FIN from client.");
+					logger.info("Sent FIN_ACK to client.");
 				}
-				else if(PktType == Packet.ACK && doneHandshake && payload.contains("Finish connection")) { //receive ACK for FIN-ACK
+				else if(PktType == Packet.ACK && doneHandshake && payload.contains("Finish connection")) { //ensure receive ACK from client for FIN-ACK
+					logger.info("Received ACK from client to acknowledge FIN_ACK.");
+					Packet endACK = packet.toBuilder()
+							.setType(Packet.DONE)
+							.setPayload("Closed".getBytes())
+							.create();
+					channel.send(endACK.toBuffer(), router);
 					logger.info("Connection closed on the server side.");
 					channel.close();
 				}
@@ -184,69 +197,80 @@ public class UDPServer {
 								logger.info("Sent ACK to packet seq={} in previous windowSeq.\n\n", seq);
 							}
 						}
+						//seq still belongs to previous window though windowSize is empty
+						else if(seq<= packetsNum && seq>= (packetsNum-windowSize+1)) {
+							//send ACK, but don't put it into buffer
+							Packet ackPkt = packet.toBuilder()
+									.setType(Packet.ACK)
+									.setPayload(msg.getBytes())
+									.create();
+							channel.send(ackPkt.toBuffer(), router);
+							logger.info("Sent ACK to packet seq={} in previous windowSeq.\n\n", seq);
+						}
 					}
 					
 					//adjust window
 					adjustWindow(seq);
-					
-					//if receive all packets, generate response
-					if(doneHandshake && windowSeq.isEmpty() && isPacketCompleted()){
-						//integrate all the packets payload and generate the request
-						String rawReq="";
-						for(int i=0; i<packetsNum; i++) {
-							Long seqKey = (long)i+1;
-							Packet p = bufferedPackets.get(seqKey);
-							rawReq += new String(p.getPayload(),StandardCharsets.UTF_8);
-						}
-						
-						//print req
-						System.out.println("\n\nPrint the request:");
-//						System.out.println("********rawReq: " + rawReq);
-						String request = parseRequest(rawReq);
-						System.out.println(request);
 
-						//get response
-						byte[] result = resGenetator.processRequest(this.requestMethod, this.queryDir, rootDir, this.hasOverwrite, this.reqBody, rlock, wlock, this.needDownload);
-						this.response = resGenetator.printResponse();
-
-						System.out.println("\n\nPrint the response:");
-						System.out.println(this.response);
-
-						String newPayload = this.response;
-						System.out.println("send newPayload"+newPayload+"    size: "+ newPayload.length());
-						if(result != null) {
-							newPayload += new String(result, StandardCharsets.UTF_8); //download content
-						}
-
-						Packet resp = packet.toBuilder()
-								.setPayload(newPayload.getBytes())
-								.create();
-
-						channel.send(resp.toBuffer(), router);
-						logger.info("Sent response to client.");
+				}
+                //if receive all packets, generate response
+				else if(PktType == Packet.DONE && doneHandshake && isPacketCompleted()) {
+					//integrate all the packets payload and generate the request
+					String rawReq="";
+					for(int i=0; i<packetsNum; i++) {
+						Long seqKey = (long)i+1;
+						Packet p = bufferedPackets.get(seqKey);
+						rawReq += new String(p.getPayload(),StandardCharsets.UTF_8);
 					}
 					
+					//print req
+					System.out.println("\n\nPrint the request:");
+//					System.out.println("********rawReq: " + rawReq);
+					String request = parseRequest(rawReq);
+					System.out.println(request);
+
+					//get response
+					byte[] result = resGenetator.processRequest(this.requestMethod, this.queryDir, rootDir, this.hasOverwrite, this.reqBody, rlock, wlock, this.needDownload);
+					this.response = resGenetator.printResponse();
+
+					System.out.println("\n\nPrint the response:");
+					System.out.println(this.response);
+
+					String newPayload = this.response;
+					System.out.println("send newPayload"+newPayload+"    size: "+ newPayload.length());
+					if(result != null) {
+						newPayload += new String(result, StandardCharsets.UTF_8); //download content
+					}
+
+					Packet resp = packet.toBuilder()
+							.setPayload(newPayload.getBytes())
+							.create();
+
+					channel.send(resp.toBuffer(), router);
+					logger.info("Sent response to client.");
 				}
-				else { //echo back the payload
-					if(doneHandshake) {
+				else if(!doneHandshake){ //echo back the payload
+					System.out.println("\n\nHaven't done handshake yet");
+					
+//					if(doneHandshake) {
 						// Send the response to the router not the client.
 						// The peer address of the packet is the address of the client already.
 						// We can use toBuilder to copy properties of the current packet.
 						// This demonstrate how to create a new packet from an existing packet.
-						Packet resp = packet.toBuilder()
-								.setPayload(payload.getBytes())
-								.create();
+//						Packet resp = packet.toBuilder()
+//								.setPayload(payload.getBytes())
+//								.create();
 	
 						//convert Packet to byte array
 //						packetByteArr = resp.toBytes();
-						channel.send(resp.toBuffer(), router);
-						logger.info("Sent echo response to client.\n\n");
-						System.exit(0); //*******************need change
+//						channel.send(resp.toBuffer(), router);
+//						logger.info("Sent echo response to client.\n\n");
+//						System.exit(0); //*******************need change
 					}
-					else {
-						System.out.println("\n\nHaven't done handshake yet");
-					}
-				}
+//					else {
+//						System.out.println("\n\nHaven't done handshake yet");
+//					}
+//				}
 
             }
             
@@ -255,33 +279,35 @@ public class UDPServer {
     
     private void adjustWindow(long seq) {
     	//adjust window (change to method)
-		if(seq == windowSeq.getFirst().longValue() && bufferedPackets.containsKey(seq)) {
-			windowSeq.removeFirst();
-			if(!toBeAckedPackets.isEmpty()) {
-				Long val = toBeAckedPackets.remove();
-				windowSeq.addLast(val);
-			}
-		}
-		else {
-			//check all seq in windowSeq, see if they exist in ackedPackets
-			int adjustNum = 0;
-			for(Long v : windowSeq) {
-				if(bufferedPackets.containsKey(v)) {
-					adjustNum++;
-				}
-				else {
-					break;
-				}
-			}
-			
-			for(int i=0; i<adjustNum; i++) {
-				windowSeq.removeFirst();
-				if(!toBeAckedPackets.isEmpty()) {
-					Long val = toBeAckedPackets.remove();
-					windowSeq.addLast(val);
-				}
-			}
-		}
+    	if(!windowSeq.isEmpty()) {
+    		if(seq == windowSeq.getFirst().longValue() && bufferedPackets.containsKey(seq)) {
+    			windowSeq.removeFirst();
+    			if(!toBeAckedPackets.isEmpty()) {
+    				Long val = toBeAckedPackets.remove();
+    				windowSeq.addLast(val);
+    			}
+    		}
+    		else {
+    			//check all seq in windowSeq, see if they exist in ackedPackets
+    			int adjustNum = 0;
+    			for(Long v : windowSeq) {
+    				if(bufferedPackets.containsKey(v)) {
+    					adjustNum++;
+    				}
+    				else {
+    					break;
+    				}
+    			}
+    			
+    			for(int i=0; i<adjustNum; i++) {
+    				windowSeq.removeFirst();
+    				if(!toBeAckedPackets.isEmpty()) {
+    					Long val = toBeAckedPackets.remove();
+    					windowSeq.addLast(val);
+    				}
+    			}
+    		}
+    	}
     }
     
     private boolean isPacketCompleted() {
@@ -301,22 +327,22 @@ public class UDPServer {
     private String parseRequest(String rawReq) throws IOException {
 		String[] reqArr = rawReq.split("\\R");
 
-		//test
-		System.out.println("print reqArr\n");
-		for(String ss : reqArr) {
-			System.out.println(ss+",,");
-		}
+//		//test
+//		System.out.println("print reqArr\n");
+//		for(String ss : reqArr) {
+//			System.out.println(ss+",,");
+//		}
 
 		String reqLine = reqArr[0];
 		if(reqLine.contains("GET") || reqLine.contains("POST")) {
 			//split the request line by " "
 			String[] reqLineArr = reqLine.split(" ");
 
-			//test
-			System.out.println("print reqLineArr\n");
-			for(String ss : reqLineArr) {
-				System.out.println(ss);
-			}
+//			//test
+//			System.out.println("print reqLineArr\n");
+//			for(String ss : reqLineArr) {
+//				System.out.println(ss);
+//			}
 
 			this.requestMethod = reqLineArr[0];
 			this.queryDir = reqLineArr[1];
